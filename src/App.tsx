@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AppState, Constraint, TEvent } from './types'
-import { analyze } from './lib/graph'
+import { analyze, traceBound } from './lib/graph'
 import { findMinimalRepairs } from './lib/repair'
 import {
   buildConsistentSample,
@@ -22,6 +22,9 @@ export default function App() {
   const [state, setState] = useState<AppState>(() => loadState() ?? buildConsistentSample())
   // 修复方案预览：仅内存生效，不写入 localStorage；任何编辑操作都会退出预览
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  // 边界追溯请求：点击时间窗表中某事件的最早/最晚时间后设置；
+  // 编辑数据、切换锚点、进入/退出修复预览时自动清除
+  const [traceReq, setTraceReq] = useState<{ eventIdx: number; kind: 'earliest' | 'latest' } | null>(null)
 
   // 本地持久化：任何修改实时写入 localStorage（预览状态不入存储）
   useEffect(() => {
@@ -96,12 +99,52 @@ export default function App() {
     return s
   }, [effectiveResult])
 
+  // —— 边界依据追溯：按当前有效约束（含修复预览）重新计算紧约束链 ——
+  const trace = useMemo(() => {
+    if (!traceReq || !anchorId || !effectiveResult.satisfiable) return null
+    return traceBound(events, effectiveConstraints, anchorId, traceReq.eventIdx, traceReq.kind)
+  }, [traceReq, events, effectiveConstraints, anchorId, effectiveResult.satisfiable])
+
+  const traceEdgeIds = useMemo(() => {
+    const s = new Set<string>()
+    if (trace) for (const st of trace.steps) s.add(`${st.edge.constraintId}:${st.edge.bound}`)
+    return s
+  }, [trace])
+
+  const traceNodeIdx = useMemo(() => {
+    const s = new Set<number>()
+    if (trace) {
+      s.add(trace.eventIdx)
+      const ai = events.findIndex((e) => e.id === anchorId)
+      if (ai >= 0) s.add(ai)
+      for (const st of trace.steps) {
+        s.add(st.from)
+        s.add(st.to)
+      }
+    }
+    return s
+  }, [trace, events, anchorId])
+
+  const traceConstraintIds = useMemo(() => {
+    const s = new Set<string>()
+    if (trace) for (const st of trace.steps) s.add(st.edge.constraintId)
+    return s
+  }, [trace])
+
+  /** 点击时间窗单元格：再次点击同一单元格则关闭追溯 */
+  const requestTrace = (eventIdx: number, kind: 'earliest' | 'latest') => {
+    setTraceReq((cur) =>
+      cur && cur.eventIdx === eventIdx && cur.kind === kind ? null : { eventIdx, kind },
+    )
+  }
+
   const activeCount = constraints.filter((c) => c.enabled).length
   const previewing = previewOffIds !== null
 
-  // —— 编辑操作（均退出预览，避免预览与新数据错位）——
+  // —— 编辑操作（均退出预览并清除边界追溯，避免预览/追溯与新数据错位）——
   const addEvent = (name: string, note: string) => {
     setPreviewIndex(null)
+    setTraceReq(null)
     const ev: TEvent = { id: uid('ev'), name, note: note || undefined }
     setState((s) => ({
       ...s,
@@ -112,6 +155,7 @@ export default function App() {
 
   const removeEvent = (id: string) => {
     setPreviewIndex(null)
+    setTraceReq(null)
     setState((s) => ({
       ...s,
       events: s.events.filter((e) => e.id !== id),
@@ -122,26 +166,34 @@ export default function App() {
 
   const renameEvent = (id: string, name: string) => {
     setPreviewIndex(null)
+    setTraceReq(null)
     setState((s) => ({
       ...s,
       events: s.events.map((e) => (e.id === id ? { ...e, name } : e)),
     }))
   }
 
-  const setAnchor = (id: string) => setState((s) => ({ ...s, anchorId: id }))
+  const setAnchor = (id: string) => {
+    // 切换锚点后旧的推导链不再适用，清除追溯
+    setTraceReq(null)
+    setState((s) => ({ ...s, anchorId: id }))
+  }
 
   const addConstraint = (c: Omit<Constraint, 'id'>) => {
     setPreviewIndex(null)
+    setTraceReq(null)
     setState((s) => ({ ...s, constraints: [...s.constraints, { ...c, id: uid('ct') }] }))
   }
 
   const removeConstraint = (id: string) => {
     setPreviewIndex(null)
+    setTraceReq(null)
     setState((s) => ({ ...s, constraints: s.constraints.filter((c) => c.id !== id) }))
   }
 
   const updateConstraint = (id: string, patch: Partial<Constraint>) => {
     setPreviewIndex(null)
+    setTraceReq(null)
     setState((s) => ({
       ...s,
       constraints: s.constraints.map((c) => {
@@ -158,25 +210,35 @@ export default function App() {
 
   const loadSample = (kind: 'ok' | 'conflict') => {
     setPreviewIndex(null)
+    setTraceReq(null)
     setState(kind === 'ok' ? buildConsistentSample() : buildContradictionSample())
   }
 
   const resetAll = () => {
     if (!window.confirm('确定清空全部事件、约束与本地存储数据吗？')) return
     setPreviewIndex(null)
+    setTraceReq(null)
     clearState()
     setState(emptyState())
   }
 
   // —— 修复方案：预览 / 确认应用 ——
-  const previewRepair = (i: number) => setPreviewIndex(i)
-  const exitPreview = () => setPreviewIndex(null)
+  const previewRepair = (i: number) => {
+    // 进入预览后按有效约束重新计算，旧追溯一律清除
+    setTraceReq(null)
+    setPreviewIndex(i)
+  }
+  const exitPreview = () => {
+    setTraceReq(null)
+    setPreviewIndex(null)
+  }
   const applyRepair = (i: number) => {
     if (!repair) return
     const plan = repair.plans[i]
     if (!plan) return
     const off = new Set(plan.disableConstraintIds)
     setPreviewIndex(null)
+    setTraceReq(null)
     // 确认后批量停用对应约束（state 变更即写入 localStorage）
     setState((s) => ({
       ...s,
@@ -268,7 +330,11 @@ export default function App() {
         <input
           type="datetime-local"
           value={anchorTime}
-          onChange={(e) => setState((s) => ({ ...s, anchorTime: e.target.value || defaultAnchorTime() }))}
+          onChange={(e) => {
+            // 锚点时间也属于编辑：清除旧追溯（偏移链不变，但避免展示过期结论）
+            setTraceReq(null)
+            setState((s) => ({ ...s, anchorTime: e.target.value || defaultAnchorTime() }))
+          }}
         />
         <span className="anchor-absolute">= {formatFullDateTime(anchorTime)}</span>
       </div>
@@ -332,6 +398,8 @@ export default function App() {
           anchorId={anchorId}
           cycleNodes={cycleNodeIdx}
           cycleEdgeIds={cycleEdgeIds}
+          traceNodes={traceNodeIdx}
+          traceEdgeIds={traceEdgeIds}
         />
       </div>
 
@@ -350,6 +418,7 @@ export default function App() {
           events={events}
           constraints={effectiveConstraints}
           cycleConstraintIds={cycleConstraintIds}
+          traceConstraintIds={traceConstraintIds}
           previewOffIds={previewOffIds}
           onAdd={addConstraint}
           onRemove={removeConstraint}
@@ -365,6 +434,10 @@ export default function App() {
           cycleEventIds={cycleEventIds}
           anchorId={anchorId}
           anchorTime={anchorTime}
+          trace={trace}
+          constraints={effectiveConstraints}
+          onTrace={requestTrace}
+          onCloseTrace={() => setTraceReq(null)}
         />
       )}
 

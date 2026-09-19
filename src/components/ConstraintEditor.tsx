@@ -5,6 +5,8 @@ interface Props {
   events: TEvent[]
   constraints: Constraint[]
   cycleConstraintIds: Set<string>
+  /** 边界追溯链上的约束 id（同步高亮） */
+  traceConstraintIds?: Set<string>
   /** 修复预览中临时停用的约束 id（不写入 localStorage） */
   previewOffIds?: Set<string> | null
   onAdd: (c: Omit<Constraint, 'id'>) => void
@@ -16,6 +18,7 @@ export default function ConstraintEditor({
   events,
   constraints,
   cycleConstraintIds,
+  traceConstraintIds,
   previewOffIds,
   onAdd,
   onRemove,
@@ -60,11 +63,12 @@ export default function ConstraintEditor({
 
       {constraints.map((c) => {
         const inCycle = cycleConstraintIds.has(c.id)
+        const inTrace = traceConstraintIds?.has(c.id) ?? false
         const previewOff = previewOffIds?.has(c.id) ?? false
         return (
           <div
             key={c.id}
-            className={`constraint-row${inCycle ? ' in-cycle' : ''}${c.enabled && !previewOff ? '' : ' disabled'}${previewOff ? ' preview-off' : ''}`}
+            className={`constraint-row${inCycle ? ' in-cycle' : ''}${inTrace ? ' in-trace' : ''}${c.enabled && !previewOff ? '' : ' disabled'}${previewOff ? ' preview-off' : ''}`}
           >
             <div className="constraint-editors">
               <input
@@ -130,6 +134,7 @@ export default function ConstraintEditor({
               读作：「{nameOf(c.aId)}」{c.relation === 'earlier' ? '早于' : '晚于'}「{nameOf(c.bId)}」{' '}
               {c.min === c.max ? c.min : `${c.min}~${c.max}`} 分钟
               {inCycle && '　← 属于矛盾环'}
+              {inTrace && '　← 属于边界追溯链'}
               {previewOff && '　← 预览停用（未保存）'}
             </div>
           </div>

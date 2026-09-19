@@ -1,4 +1,4 @@
-import { analyze, buildEdges, constraintToEdges } from '../src/lib/graph'
+import { analyze, buildEdges, constraintToEdges, traceBound } from '../src/lib/graph'
 import { DEFAULT_STATE_LIMIT, findMinimalRepairs, MAX_PLANS } from '../src/lib/repair'
 import { buildConsistentSample, buildContradictionSample } from '../src/lib/samples'
 import type { Constraint, TEvent } from '../src/types'
@@ -297,6 +297,154 @@ function approxEq(a: number | null, b: number | null) {
   assert(stillConflict.satisfiable, '手动停用环上一条后矛盾消除（与修复建议等价）')
   const r = findMinimalRepairs(s.events, disabled, s.anchorId)
   assert(r.found && r.disableCount === 0 && r.plans.length === 0, '已无可修复矛盾')
+}
+
+// ---- 边界追溯：可满足示例的最晚边界（正向图紧约束链）----
+{
+  const s = buildConsistentSample()
+  const byName = new Map(s.events.map((e, i) => [e.name, i]))
+  const anchorIdx = byName.get('值班告警触发')!
+
+  // 介入最晚 +5：单步链，采用「介入 晚于 告警 2~5」的上界侧（告警 -> 介入, +5）
+  const t1 = traceBound(s.events, s.constraints, s.anchorId, byName.get('值班工程师介入')!, 'latest')!
+  assert(t1 !== null && t1.offset === 5, '追溯：介入最晚偏移 +5')
+  assert(t1.steps.length === 1, '追溯：介入最晚为单步链')
+  assert(t1.steps[0].edge.bound === 'upper' && t1.steps[0].edge.w === 5, '追溯：采用上界侧 +5')
+  assert(t1.steps[0].from === anchorIdx && t1.steps[0].to === byName.get('值班工程师介入')!, '追溯：链从锚点指向目标')
+  assert(t1.steps[0].cumulative === 5, '追溯：累计偏移 +5')
+
+  // 恢复最晚 +20：唯一直达上界边（告警 -> 恢复, +20）
+  const t2 = traceBound(s.events, s.constraints, s.anchorId, byName.get('服务恢复')!, 'latest')!
+  assert(t2.offset === 20 && t2.steps.length === 1, '追溯：恢复最晚 +20 为单步直达')
+  assert(t2.steps[0].edge.w === 20 && t2.steps[0].cumulative === 20, '追溯：恢复最晚累计 +20')
+}
+
+// ---- 边界追溯：最早边界正确还原反向图路径 ----
+{
+  const s = buildConsistentSample()
+  const byName = new Map(s.events.map((e, i) => [e.name, i]))
+  const anchorIdx = byName.get('值班告警触发')!
+  const onCall = byName.get('值班工程师介入')!
+  const recovered = byName.get('服务恢复')!
+
+  // 介入最早 +2：反向图上 告警 -> 介入 走「介入 晚于 告警 2~5」下界侧的反向边
+  const t1 = traceBound(s.events, s.constraints, s.anchorId, onCall, 'earliest')!
+  assert(t1.offset === 2, '追溯：介入最早偏移 +2')
+  assert(t1.steps.length === 1, '追溯：介入最早为单步链')
+  const st1 = t1.steps[0]
+  assert(st1.edge.bound === 'lower' && st1.edge.w === -2, '追溯：采用下界侧（权 −2）')
+  // 原始边方向为 介入 -> 告警（t_告警 − t_介入 ≤ −2），行走方向相反
+  assert(st1.edge.u === onCall && st1.edge.v === anchorIdx, '追溯：最早边界还原为原始边方向')
+  assert(st1.from === anchorIdx && st1.to === onCall, '追溯：行走方向从锚点出发')
+  assert(st1.cumulative === 2, '追溯：最早累计偏移 +2')
+
+  // 恢复最早 +10：反向链 告警 -> 介入 -> 定位 -> 恢复（−2, −3, −5），累计 2, 5, 10
+  const t2 = traceBound(s.events, s.constraints, s.anchorId, recovered, 'earliest')!
+  assert(t2.offset === 10, '追溯：恢复最早偏移 +10')
+  assert(t2.steps.length === 3, '追溯：恢复最早为 3 步链')
+  assert(t2.steps[0].from === anchorIdx, '追溯：链起点为锚点')
+  assert(t2.steps[2].to === recovered, '追溯：链终点为目标事件')
+  for (let i = 1; i < t2.steps.length; i++) {
+    assert(t2.steps[i].from === t2.steps[i - 1].to, `追溯：第 ${i + 1} 步与上一步首尾相接`)
+  }
+  assert(
+    JSON.stringify(t2.steps.map((s) => s.cumulative)) === JSON.stringify([2, 5, 10]),
+    '追溯：累计偏移依次为 2, 5, 10',
+  )
+  assert(
+    t2.steps.every((s) => s.edge.bound === 'lower') &&
+      JSON.stringify(t2.steps.map((s) => s.edge.w)) === JSON.stringify([-2, -3, -5]),
+    '追溯：各步均为下界侧，权重 −2/−3/−5',
+  )
+  // 每步的 edge 必须是原始图中的真实边（u/v 未被反向图污染）
+  const origEdges = buildEdges(s.events, s.constraints).edges
+  for (const st of t2.steps) {
+    assert(
+      origEdges.some(
+        (e) =>
+          e.u === st.edge.u &&
+          e.v === st.edge.v &&
+          e.w === st.edge.w &&
+          e.constraintId === st.edge.constraintId &&
+          e.bound === st.edge.bound,
+      ),
+      '追溯：最早链上的边均来自原始图（反向路径已正确还原）',
+    )
+  }
+}
+
+// ---- 边界追溯：全部事件的追溯值与时间窗一致（性质校验）----
+{
+  const s = buildConsistentSample()
+  const r = analyze(s.events, s.constraints, s.anchorId)
+  const anchorIdx = s.events.findIndex((e) => e.id === s.anchorId)!
+  for (let i = 0; i < s.events.length; i++) {
+    const w = r.windows.get(i)!
+    for (const kind of ['earliest', 'latest'] as const) {
+      const t = traceBound(s.events, s.constraints, s.anchorId, i, kind)
+      const offset = kind === 'earliest' ? w.earliestOffset : w.latestOffset
+      if (offset === null) {
+        assert(t === null, `追溯：${s.events[i].name} ${kind} 无界时返回 null`)
+        continue
+      }
+      assert(t !== null && t.offset === offset, `追溯：${s.events[i].name} ${kind} 偏移与时间窗一致`)
+      if (!t) continue
+      if (i === anchorIdx) {
+        assert(t.steps.length === 0 && t.offset === 0, '追溯：锚点为零步证明')
+        continue
+      }
+      // 链首尾正确、步步相接、累计收敛到边界值、权重和一致
+      assert(t.steps[0].from === anchorIdx, `追溯：${s.events[i].name} ${kind} 链起于锚点`)
+      assert(t.steps[t.steps.length - 1].to === i, `追溯：${s.events[i].name} ${kind} 链终于目标`)
+      let contiguous = true
+      for (let k = 1; k < t.steps.length; k++) {
+        if (t.steps[k].from !== t.steps[k - 1].to) contiguous = false
+      }
+      assert(contiguous, `追溯：${s.events[i].name} ${kind} 链步步相接`)
+      const sum = t.steps.reduce((a, st) => a + st.edge.w, 0)
+      assert(
+        kind === 'latest' ? sum === t.offset : sum === -t.offset,
+        `追溯：${s.events[i].name} ${kind} 权重和与边界一致`,
+      )
+      assert(
+        t.steps[t.steps.length - 1].cumulative === t.offset,
+        `追溯：${s.events[i].name} ${kind} 末步累计即边界值`,
+      )
+    }
+  }
+}
+
+// ---- 边界追溯：锚点零步 / 无界与无锚点返回 null / 停用约束后重算 ----
+{
+  const s = buildConsistentSample()
+  const byName = new Map(s.events.map((e, i) => [e.name, i]))
+  const anchorIdx = byName.get('值班告警触发')!
+
+  const ta = traceBound(s.events, s.constraints, s.anchorId, anchorIdx, 'earliest')!
+  assert(ta.steps.length === 0 && ta.offset === 0, '追溯：锚点最早为零步证明')
+  const tb = traceBound(s.events, s.constraints, s.anchorId, anchorIdx, 'latest')!
+  assert(tb.steps.length === 0 && tb.offset === 0, '追溯：锚点最晚为零步证明')
+
+  // 无法定时（媒体报道，与锚点无通路）：两侧均不可追溯
+  const press = byName.get('媒体报道')!
+  assert(traceBound(s.events, s.constraints, s.anchorId, press, 'earliest') === null, '追溯：无法定时事件最早返回 null')
+  assert(traceBound(s.events, s.constraints, s.anchorId, press, 'latest') === null, '追溯：无法定时事件最晚返回 null')
+
+  // 无锚点 / 非法下标
+  assert(traceBound(s.events, s.constraints, null, anchorIdx, 'latest') === null, '追溯：无锚点返回 null')
+  assert(traceBound(s.events, s.constraints, s.anchorId, 999, 'latest') === null, '追溯：非法事件下标返回 null')
+
+  // 模拟修复预览：停用「恢复 晚于 告警 8~20」后，恢复最晚边界改走 4 步链（+25）
+  const recovered = byName.get('服务恢复')!
+  const overall = s.constraints.find((c) => c.min === 8 && c.max === 20)!
+  const previewed = s.constraints.map((c) => (c.id === overall.id ? { ...c, enabled: false } : c))
+  const t = traceBound(s.events, previewed, s.anchorId, recovered, 'latest')!
+  assert(t.offset === 25 && t.steps.length === 4, '追溯：停用整体约束后最晚边界按有效约束重算为 +25（4 步）')
+  assert(
+    JSON.stringify(t.steps.map((s2) => s2.cumulative)) === JSON.stringify([5, 15, 21, 25]),
+    '追溯：重算链累计偏移 5/15/21/25',
+  )
+  assert(!t.steps.some((s2) => s2.edge.constraintId === overall.id), '追溯：重算链不含已停用约束')
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

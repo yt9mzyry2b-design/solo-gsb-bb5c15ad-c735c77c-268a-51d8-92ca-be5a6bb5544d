@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "test": "esbuild scripts/test-graph.ts --bundle --platform=node --format=esm --outfile=/tmp/test-graph.mjs && node /tmp/test-graph.mjs"
+    "test": "esbuild scripts/test-graph.ts --bundle --platform=node --format=esm --outfile=/tmp/test-graph.mjs && node /tmp/test-graph.mjs",
+    "smoke": "esbuild scripts/smoke-app.tsx --bundle --platform=node --format=esm --alias:react-dom/server=react-dom/server.browser --outfile=/tmp/smoke-app.mjs && node /tmp/smoke-app.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

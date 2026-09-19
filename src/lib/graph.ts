@@ -1,5 +1,7 @@
 import type {
   AnalysisResult,
+  BoundTrace,
+  BoundTraceStep,
   Constraint,
   DiffEdge,
   TEvent,
@@ -230,4 +232,88 @@ export function analyze(
   }
 
   return { satisfiable: true, cycle: undefined, windows }
+}
+
+/**
+ * 沿前驱指针从 target 回溯到 source，返回从 source 出发按行走顺序排列的边。
+ * 系统可满足时前驱子图无环，必然在 n 步内到达 source；guard 仅为防御。
+ */
+function reconstructPath(
+  predEdge: (DiffEdge | null)[],
+  source: number,
+  target: number,
+): DiffEdge[] | null {
+  const path: DiffEdge[] = []
+  let cur = target
+  let guard = 0
+  while (cur !== source) {
+    const pe = predEdge[cur]
+    if (!pe) return null
+    path.push(pe)
+    cur = pe.u
+    if (++guard > predEdge.length) return null
+  }
+  path.reverse()
+  return path
+}
+
+/**
+ * 边界依据追溯：还原“从锚点推出某事件最早/最晚边界”的紧约束链。
+ *
+ * 前提：差分系统可满足（调用方保证，否则最短路无意义）。
+ * - 最晚边界：正向图上锚点到目标的最短路，路径边即依次采用的原始约束边，
+ *   累计偏移 = 路径权重前缀和（t_to − t_anchor 的上界）；
+ * - 最早边界：反向图上的最短路给出 t_anchor − t_target 的最小上界；
+ *   反向路径上的每条边都还原为原始约束边（方向相反、权重与上/下界侧不变），
+ *   累计偏移 = 路径权重前缀和取负（t_to − t_anchor 的下界）。
+ *
+ * 锚点自身返回零步证明（steps 为空）；该侧无界 / 事件不可达 / 无锚点时返回 null。
+ */
+export function traceBound(
+  events: TEvent[],
+  constraints: Constraint[],
+  anchorId: string | null,
+  eventIdx: number,
+  kind: 'earliest' | 'latest',
+): BoundTrace | null {
+  const n = events.length
+  const anchorIdx = anchorId != null ? events.findIndex((e) => e.id === anchorId) : -1
+  if (anchorIdx < 0 || eventIdx < 0 || eventIdx >= n) return null
+
+  // 锚点：边界即锚点自身，零步证明
+  if (eventIdx === anchorIdx) {
+    return { eventIdx, kind, offset: 0, steps: [] }
+  }
+
+  const { edges } = buildEdges(events, constraints)
+  const init = new Array(n).fill(INF)
+  init[anchorIdx] = 0
+
+  if (kind === 'latest') {
+    const { dist, predEdge } = bellmanFord(n, edges, init)
+    if (!Number.isFinite(dist[eventIdx])) return null
+    const chain = reconstructPath(predEdge, anchorIdx, eventIdx)
+    if (!chain) return null
+    let cum = 0
+    const steps: BoundTraceStep[] = chain.map((e) => {
+      cum += e.w
+      return { edge: e, from: e.u, to: e.v, cumulative: cum }
+    })
+    return { eventIdx, kind, offset: dist[eventIdx], steps }
+  }
+
+  // 最早边界：在反向图上求最短路，再把反向路径逐步还原为原始约束边
+  const reversed = edges.map((e) => ({ ...e, u: e.v, v: e.u }))
+  const { dist, predEdge } = bellmanFord(n, reversed, init)
+  if (!Number.isFinite(dist[eventIdx])) return null
+  const chain = reconstructPath(predEdge, anchorIdx, eventIdx)
+  if (!chain) return null
+  let cum = 0
+  const steps: BoundTraceStep[] = chain.map((re) => {
+    cum += re.w
+    // re 是原始边 (u -> v, w) 的反向拷贝；本步从 v 走到 u，展示时还原为原始边
+    const orig: DiffEdge = { ...re, u: re.v, v: re.u }
+    return { edge: orig, from: re.u, to: re.v, cumulative: -cum }
+  })
+  return { eventIdx, kind, offset: -dist[eventIdx], steps }
 }

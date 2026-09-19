@@ -8,6 +8,10 @@ interface Props {
   anchorId: string | null
   cycleNodes: Set<number>
   cycleEdgeIds: Set<string> // "constraintId:bound"
+  /** 边界追溯链上的节点（含锚点与目标事件） */
+  traceNodes?: Set<number>
+  /** 边界追溯链上的边，键同 cycleEdgeIds */
+  traceEdgeIds?: Set<string>
 }
 
 const W = 760
@@ -29,11 +33,12 @@ interface Arc {
   lx: number
   ly: number
   inCycle: boolean
+  inTrace: boolean
 }
 
 /**
  * 差分约束图可视化：环形布局，边 u -> v 标注权重 w（表示 t_v - t_u <= w）。
- * 矛盾环上的节点与边以红色突出显示。
+ * 矛盾环上的节点与边以红色突出显示；边界追溯链以紫色突出显示。
  */
 export default function GraphView({
   events,
@@ -41,6 +46,8 @@ export default function GraphView({
   anchorId,
   cycleNodes,
   cycleEdgeIds,
+  traceNodes,
+  traceEdgeIds,
 }: Props) {
   const { edges } = useMemo(() => buildEdges(events, constraints), [events, constraints])
 
@@ -59,15 +66,17 @@ export default function GraphView({
       pairSeen.set(unordered, ord + 1)
 
       const { path, lx, ly } = arcPath(p1, p2, edge.u === edge.v, ord, pairCount.get(unordered) ?? 1)
+      const key = `${edge.constraintId}:${edge.bound}`
       return {
         edge,
         path,
         lx,
         ly,
-        inCycle: cycleEdgeIds.has(`${edge.constraintId}:${edge.bound}`),
+        inCycle: cycleEdgeIds.has(key),
+        inTrace: traceEdgeIds?.has(key) ?? false,
       }
     })
-  }, [edges, events.length, cycleEdgeIds])
+  }, [edges, events.length, cycleEdgeIds, traceEdgeIds])
 
   if (events.length === 0) {
     return <div className="graph-empty">添加事件后，这里将展示差分约束图</div>
@@ -85,6 +94,9 @@ export default function GraphView({
           <marker id="arrow-cycle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#f85149" />
           </marker>
+          <marker id="arrow-trace" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#bc8cff" />
+          </marker>
         </defs>
 
         {arcs.map((a, i) => (
@@ -92,10 +104,10 @@ export default function GraphView({
             <path
               d={a.path}
               fill="none"
-              stroke={a.inCycle ? '#f85149' : '#5b7186'}
-              strokeWidth={a.inCycle ? 2.6 : 1.3}
-              markerEnd={a.inCycle ? 'url(#arrow-cycle)' : 'url(#arrow)'}
-              opacity={a.inCycle ? 1 : 0.85}
+              stroke={a.inCycle ? '#f85149' : a.inTrace ? '#bc8cff' : '#5b7186'}
+              strokeWidth={a.inCycle || a.inTrace ? 2.6 : 1.3}
+              markerEnd={a.inCycle ? 'url(#arrow-cycle)' : a.inTrace ? 'url(#arrow-trace)' : 'url(#arrow)'}
+              opacity={a.inCycle || a.inTrace ? 1 : 0.85}
             />
             <text
               x={a.lx}
@@ -104,7 +116,7 @@ export default function GraphView({
               dominantBaseline="central"
               fontSize="11"
               fontFamily="ui-monospace, monospace"
-              fill={a.inCycle ? '#ff8f8a' : '#8da2b5'}
+              fill={a.inCycle ? '#ff8f8a' : a.inTrace ? '#d2a8ff' : '#8da2b5'}
               stroke="#1a212b"
               strokeWidth="3.5"
               paintOrder="stroke"
@@ -118,20 +130,22 @@ export default function GraphView({
           const { x, y } = nodePos(i, n)
           const isAnchor = ev.id === anchorId
           const inCycle = cycleNodes.has(i)
-          const fill = isAnchor ? '#1f3a57' : inCycle ? '#3d1f22' : '#222c38'
-          const stroke = inCycle ? '#f85149' : isAnchor ? '#4da3ff' : '#46586b'
+          const inTrace = traceNodes?.has(i) ?? false
+          const fill = isAnchor ? '#1f3a57' : inCycle ? '#3d1f22' : inTrace ? '#2d2440' : '#222c38'
+          const stroke = inCycle ? '#f85149' : isAnchor ? '#4da3ff' : inTrace ? '#bc8cff' : '#46586b'
+          const emphasized = isAnchor || inCycle || inTrace
           const label = ev.name.length > 6 ? `${ev.name.slice(0, 5)}…` : ev.name
           return (
             <g key={ev.id}>
-              <circle cx={x} cy={y} r={NODE_R} fill={fill} stroke={stroke} strokeWidth={isAnchor || inCycle ? 2.4 : 1.4} />
+              <circle cx={x} cy={y} r={NODE_R} fill={fill} stroke={stroke} strokeWidth={emphasized ? 2.4 : 1.4} />
               <text
                 x={x}
                 y={y}
                 textAnchor="middle"
                 dominantBaseline="central"
                 fontSize="12"
-                fontWeight={isAnchor || inCycle ? 700 : 500}
-                fill={inCycle ? '#ff8f8a' : isAnchor ? '#cfe6ff' : '#e6edf3'}
+                fontWeight={emphasized ? 700 : 500}
+                fill={inCycle ? '#ff8f8a' : isAnchor ? '#cfe6ff' : inTrace ? '#d2a8ff' : '#e6edf3'}
               >
                 {label}
               </text>
@@ -151,6 +165,12 @@ export default function GraphView({
           <span className="swatch" style={{ background: '#f85149' }} />
           矛盾环
         </span>
+        {(traceEdgeIds?.size ?? 0) > 0 && (
+          <span>
+            <span className="swatch" style={{ background: '#bc8cff' }} />
+            边界追溯链
+          </span>
+        )}
         <span>
           <span className="swatch" style={{ background: '#4da3ff' }} />
           锚点事件

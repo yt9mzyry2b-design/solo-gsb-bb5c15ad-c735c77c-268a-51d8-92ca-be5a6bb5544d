@@ -76,6 +76,37 @@ export interface WindowInfo {
 }
 
 /**
+ * 边界追溯中的一步：沿一条差分边把边界从 from 事件推进到 to 事件。
+ * edge 始终为原始图方向的差分边（u -> v，权 w 表示 t_v - t_u <= w）；
+ * 最早边界在反向图上推导，此时行走方向 from -> to 与 edge.u -> edge.v 相反。
+ */
+export interface BoundTraceStep {
+  /** 本步采用的原始差分边（含约束 id 与上/下界侧） */
+  edge: DiffEdge
+  /** 推导方向上的起点事件下标（从锚点出发） */
+  from: number
+  /** 推导方向上的终点事件下标 */
+  to: number
+  /** 走完该步后，to 事件相对锚点的累计偏移（分钟） */
+  cumulative: number
+}
+
+/**
+ * 某事件最早/最晚边界的推导链：从锚点出发的紧约束链。
+ * steps 按推导顺序排列；锚点自身为零步证明（steps 为空）。
+ */
+export interface BoundTrace {
+  /** 目标事件下标 */
+  eventIdx: number
+  /** 追溯的是最早边界还是最晚边界 */
+  kind: 'earliest' | 'latest'
+  /** 推导出的边界值：相对锚点的偏移（分钟） */
+  offset: number
+  /** 从锚点出发按推导顺序排列的步骤 */
+  steps: BoundTraceStep[]
+}
+
+/**
  * 最小修复方案：停用 disableConstraintIds 中的约束后，差分系统恢复可满足。
  */
 export interface RepairPlan {
