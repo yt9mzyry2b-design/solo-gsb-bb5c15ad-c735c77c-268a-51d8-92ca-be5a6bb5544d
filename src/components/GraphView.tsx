@@ -8,6 +8,12 @@ interface Props {
   anchorId: string | null
   cycleNodes: Set<number>
   cycleEdgeIds: Set<string> // "constraintId:bound"
+  /** 边界依据追溯链上的节点（含锚点） */
+  traceNodes?: Set<number>
+  /** 边界依据追溯链上的边 "constraintId:bound" */
+  traceEdgeIds?: Set<string>
+  /** 追溯目标事件（高亮链的终点） */
+  traceTarget?: number | null
 }
 
 const W = 760
@@ -16,6 +22,10 @@ const CX = W / 2
 const CY = H / 2
 const R = 180
 const NODE_R = 26
+
+/** 追溯高亮色（紫，区别于矛盾环的红与锚点的蓝） */
+const TRACE_COLOR = '#c792ea'
+const TRACE_NODE_FILL = '#2f2440'
 
 function nodePos(i: number, n: number): { x: number; y: number } {
   if (n === 1) return { x: CX, y: CY }
@@ -29,11 +39,12 @@ interface Arc {
   lx: number
   ly: number
   inCycle: boolean
+  inTrace: boolean
 }
 
 /**
  * 差分约束图可视化：环形布局，边 u -> v 标注权重 w（表示 t_v - t_u <= w）。
- * 矛盾环上的节点与边以红色突出显示。
+ * 矛盾环上的节点与边以红色突出显示；边界依据追溯链以紫色突出显示。
  */
 export default function GraphView({
   events,
@@ -41,6 +52,9 @@ export default function GraphView({
   anchorId,
   cycleNodes,
   cycleEdgeIds,
+  traceNodes,
+  traceEdgeIds,
+  traceTarget = null,
 }: Props) {
   const { edges } = useMemo(() => buildEdges(events, constraints), [events, constraints])
 
@@ -65,9 +79,10 @@ export default function GraphView({
         lx,
         ly,
         inCycle: cycleEdgeIds.has(`${edge.constraintId}:${edge.bound}`),
+        inTrace: !!traceEdgeIds?.has(`${edge.constraintId}:${edge.bound}`),
       }
     })
-  }, [edges, events.length, cycleEdgeIds])
+  }, [edges, events.length, cycleEdgeIds, traceEdgeIds])
 
   if (events.length === 0) {
     return <div className="graph-empty">添加事件后，这里将展示差分约束图</div>
@@ -85,6 +100,9 @@ export default function GraphView({
           <marker id="arrow-cycle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#f85149" />
           </marker>
+          <marker id="arrow-trace" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={TRACE_COLOR} />
+          </marker>
         </defs>
 
         {arcs.map((a, i) => (
@@ -92,10 +110,16 @@ export default function GraphView({
             <path
               d={a.path}
               fill="none"
-              stroke={a.inCycle ? '#f85149' : '#5b7186'}
-              strokeWidth={a.inCycle ? 2.6 : 1.3}
-              markerEnd={a.inCycle ? 'url(#arrow-cycle)' : 'url(#arrow)'}
-              opacity={a.inCycle ? 1 : 0.85}
+              stroke={a.inCycle ? '#f85149' : a.inTrace ? TRACE_COLOR : '#5b7186'}
+              strokeWidth={a.inCycle || a.inTrace ? 2.8 : 1.3}
+              markerEnd={
+                a.inCycle
+                  ? 'url(#arrow-cycle)'
+                  : a.inTrace
+                    ? 'url(#arrow-trace)'
+                    : 'url(#arrow)'
+              }
+              opacity={a.inCycle || a.inTrace ? 1 : 0.85}
             />
             <text
               x={a.lx}
@@ -104,10 +128,11 @@ export default function GraphView({
               dominantBaseline="central"
               fontSize="11"
               fontFamily="ui-monospace, monospace"
-              fill={a.inCycle ? '#ff8f8a' : '#8da2b5'}
+              fill={a.inCycle ? '#ff8f8a' : a.inTrace ? TRACE_COLOR : '#8da2b5'}
               stroke="#1a212b"
               strokeWidth="3.5"
               paintOrder="stroke"
+              fontWeight={a.inTrace ? 700 : 400}
             >
               {a.edge.w > 0 ? `+${a.edge.w}` : a.edge.w}
             </text>
@@ -118,20 +143,43 @@ export default function GraphView({
           const { x, y } = nodePos(i, n)
           const isAnchor = ev.id === anchorId
           const inCycle = cycleNodes.has(i)
-          const fill = isAnchor ? '#1f3a57' : inCycle ? '#3d1f22' : '#222c38'
-          const stroke = inCycle ? '#f85149' : isAnchor ? '#4da3ff' : '#46586b'
+          const inTrace = !!traceNodes?.has(i)
+          const isTraceTarget = traceTarget === i
+          const fill = isTraceTarget
+            ? '#3a2a52'
+            : inTrace
+              ? TRACE_NODE_FILL
+              : isAnchor
+                ? '#1f3a57'
+                : inCycle
+                  ? '#3d1f22'
+                  : '#222c38'
+          const stroke = inCycle
+            ? '#f85149'
+            : inTrace
+              ? TRACE_COLOR
+              : isAnchor
+                ? '#4da3ff'
+                : '#46586b'
           const label = ev.name.length > 6 ? `${ev.name.slice(0, 5)}…` : ev.name
           return (
             <g key={ev.id}>
-              <circle cx={x} cy={y} r={NODE_R} fill={fill} stroke={stroke} strokeWidth={isAnchor || inCycle ? 2.4 : 1.4} />
+              <circle
+                cx={x}
+                cy={y}
+                r={NODE_R}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={isTraceTarget ? 3.2 : isAnchor || inCycle || inTrace ? 2.4 : 1.4}
+              />
               <text
                 x={x}
                 y={y}
                 textAnchor="middle"
                 dominantBaseline="central"
                 fontSize="12"
-                fontWeight={isAnchor || inCycle ? 700 : 500}
-                fill={inCycle ? '#ff8f8a' : isAnchor ? '#cfe6ff' : '#e6edf3'}
+                fontWeight={isAnchor || inCycle || inTrace ? 700 : 500}
+                fill={inCycle ? '#ff8f8a' : inTrace ? '#e3d2f7' : isAnchor ? '#cfe6ff' : '#e6edf3'}
               >
                 {label}
               </text>
@@ -150,6 +198,10 @@ export default function GraphView({
         <span>
           <span className="swatch" style={{ background: '#f85149' }} />
           矛盾环
+        </span>
+        <span>
+          <span className="swatch" style={{ background: TRACE_COLOR }} />
+          边界依据追溯链
         </span>
         <span>
           <span className="swatch" style={{ background: '#4da3ff' }} />

@@ -75,6 +75,45 @@ export interface WindowInfo {
   latestOffset: number | null
 }
 
+/** 被追溯的边界：最早（下界）或最晚（上界） */
+export type BoundaryKind = 'earliest' | 'latest'
+
+/**
+ * 紧约束链上的一步：采用某条原始约束的一侧（上界/下界）差分边，
+ * 从 from 事件推导到 to 事件。steps 按推导顺序排列（锚点在前）。
+ */
+export interface TraceStep {
+  /** 采用的差分边（图中的原始方向） */
+  edge: DiffEdge
+  /** 该步起点事件下标 */
+  from: number
+  /** 该步终点事件下标（被收紧的变量所在事件） */
+  to: number
+  /** 该步边的权重（分钟） */
+  weight: number
+  /** 截至该步（含）沿链累计的偏移；最晚链即最短路距离，最早链为下界累计 */
+  cumulative: number
+}
+
+/**
+ * 一条边界的依据追溯：从锚点出发，经若干条紧约束（最短路上实际松弛的边）
+ * 推导出目标事件最早 / 最晚边界的完整证明链。
+ */
+export interface BoundaryTrace {
+  kind: BoundaryKind
+  /** 锚点事件下标 */
+  anchorIdx: number
+  /** 目标事件下标 */
+  targetIdx: number
+  /** 最终边界相对锚点的偏移（分钟）；锚点零步证明时为 0 */
+  offset: number
+  /**
+   * 按推导顺序（锚点 → 目标）排列的紧约束链；
+   * 锚点自身为零步证明，长度为 0。
+   */
+  steps: TraceStep[]
+}
+
 /**
  * 最小修复方案：停用 disableConstraintIds 中的约束后，差分系统恢复可满足。
  */

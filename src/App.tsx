@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AppState, Constraint, TEvent } from './types'
-import { analyze } from './lib/graph'
+import type { AppState, BoundaryKind, Constraint, TEvent } from './types'
+import { analyze, traceBoundary } from './lib/graph'
 import { findMinimalRepairs } from './lib/repair'
 import {
   buildConsistentSample,
@@ -17,11 +17,14 @@ import GraphView from './components/GraphView'
 import CyclePanel from './components/CyclePanel'
 import WindowsTable from './components/WindowsTable'
 import RepairPanel from './components/RepairPanel'
+import TracePanel from './components/TracePanel'
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState() ?? buildConsistentSample())
   // 修复方案预览：仅内存生效，不写入 localStorage；任何编辑操作都会退出预览
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  // 边界依据追溯：当前追溯的目标事件与边界（最早/最晚）
+  const [traceQuery, setTraceQuery] = useState<{ eventId: string; kind: BoundaryKind } | null>(null)
 
   // 本地持久化：任何修改实时写入 localStorage（预览状态不入存储）
   useEffect(() => {
@@ -96,12 +99,59 @@ export default function App() {
     return s
   }, [effectiveResult])
 
+  // —— 边界依据追溯：仅在可满足（含修复预览）且已设锚点时，按当前有效约束重算 ——
+  // 编辑 / 切换锚点 / 进入修复预览会显式清空 traceQuery；
+  // 若目标事件或边界在新数据下已失效（如被删除、变为无法定时），trace 为 null，高亮自然消失。
+  const trace = useMemo(() => {
+    if (!traceQuery || !effectiveResult.satisfiable) return null
+    return traceBoundary(
+      events,
+      effectiveConstraints,
+      anchorId,
+      traceQuery.eventId,
+      traceQuery.kind,
+    )
+  }, [traceQuery, effectiveResult.satisfiable, events, effectiveConstraints, anchorId])
+
+  const traceNodeIdx = useMemo(() => {
+    const s = new Set<number>()
+    if (trace) {
+      s.add(trace.anchorIdx)
+      for (const st of trace.steps) {
+        s.add(st.from)
+        s.add(st.to)
+      }
+    }
+    return s
+  }, [trace])
+
+  const traceEdgeIds = useMemo(() => {
+    const s = new Set<string>()
+    if (trace) for (const st of trace.steps) s.add(`${st.edge.constraintId}:${st.edge.bound}`)
+    return s
+  }, [trace])
+
+  const traceConstraintSteps = useMemo(() => {
+    const m = new Map<string, number>()
+    if (trace) trace.steps.forEach((st, i) => m.set(st.edge.constraintId, i + 1))
+    return m
+  }, [trace])
+
   const activeCount = constraints.filter((c) => c.enabled).length
   const previewing = previewOffIds !== null
 
-  // —— 编辑操作（均退出预览，避免预览与新数据错位）——
+  // —— 点击时间窗单元格：同一格再次点击则取消追溯 ——
+  const onTraceCell = (eventId: string, kind: BoundaryKind) => {
+    setTraceQuery((q) =>
+      q && q.eventId === eventId && q.kind === kind ? null : { eventId, kind },
+    )
+  }
+  const clearTrace = () => setTraceQuery(null)
+
+  // —— 编辑操作（均退出预览并清除边界追溯，避免与新数据错位）——
   const addEvent = (name: string, note: string) => {
     setPreviewIndex(null)
+    clearTrace()
     const ev: TEvent = { id: uid('ev'), name, note: note || undefined }
     setState((s) => ({
       ...s,
@@ -112,6 +162,7 @@ export default function App() {
 
   const removeEvent = (id: string) => {
     setPreviewIndex(null)
+    clearTrace()
     setState((s) => ({
       ...s,
       events: s.events.filter((e) => e.id !== id),
@@ -122,26 +173,33 @@ export default function App() {
 
   const renameEvent = (id: string, name: string) => {
     setPreviewIndex(null)
+    clearTrace()
     setState((s) => ({
       ...s,
       events: s.events.map((e) => (e.id === id ? { ...e, name } : e)),
     }))
   }
 
-  const setAnchor = (id: string) => setState((s) => ({ ...s, anchorId: id }))
+  const setAnchor = (id: string) => {
+    clearTrace()
+    setState((s) => ({ ...s, anchorId: id }))
+  }
 
   const addConstraint = (c: Omit<Constraint, 'id'>) => {
     setPreviewIndex(null)
+    clearTrace()
     setState((s) => ({ ...s, constraints: [...s.constraints, { ...c, id: uid('ct') }] }))
   }
 
   const removeConstraint = (id: string) => {
     setPreviewIndex(null)
+    clearTrace()
     setState((s) => ({ ...s, constraints: s.constraints.filter((c) => c.id !== id) }))
   }
 
   const updateConstraint = (id: string, patch: Partial<Constraint>) => {
     setPreviewIndex(null)
+    clearTrace()
     setState((s) => ({
       ...s,
       constraints: s.constraints.map((c) => {
@@ -158,25 +216,35 @@ export default function App() {
 
   const loadSample = (kind: 'ok' | 'conflict') => {
     setPreviewIndex(null)
+    clearTrace()
     setState(kind === 'ok' ? buildConsistentSample() : buildContradictionSample())
   }
 
   const resetAll = () => {
     if (!window.confirm('确定清空全部事件、约束与本地存储数据吗？')) return
     setPreviewIndex(null)
+    clearTrace()
     clearState()
     setState(emptyState())
   }
 
   // —— 修复方案：预览 / 确认应用 ——
-  const previewRepair = (i: number) => setPreviewIndex(i)
-  const exitPreview = () => setPreviewIndex(null)
+  // 进入修复预览即清除旧追溯：预览中的追溯需基于停用后的有效约束重新点击生成
+  const previewRepair = (i: number) => {
+    clearTrace()
+    setPreviewIndex(i)
+  }
+  const exitPreview = () => {
+    clearTrace()
+    setPreviewIndex(null)
+  }
   const applyRepair = (i: number) => {
     if (!repair) return
     const plan = repair.plans[i]
     if (!plan) return
     const off = new Set(plan.disableConstraintIds)
     setPreviewIndex(null)
+    clearTrace()
     // 确认后批量停用对应约束（state 变更即写入 localStorage）
     setState((s) => ({
       ...s,
@@ -332,6 +400,9 @@ export default function App() {
           anchorId={anchorId}
           cycleNodes={cycleNodeIdx}
           cycleEdgeIds={cycleEdgeIds}
+          traceNodes={traceNodeIdx}
+          traceEdgeIds={traceEdgeIds}
+          traceTarget={trace ? trace.targetIdx : null}
         />
       </div>
 
@@ -351,6 +422,7 @@ export default function App() {
           constraints={effectiveConstraints}
           cycleConstraintIds={cycleConstraintIds}
           previewOffIds={previewOffIds}
+          traceConstraintSteps={traceConstraintSteps}
           onAdd={addConstraint}
           onRemove={removeConstraint}
           onUpdate={updateConstraint}
@@ -359,13 +431,28 @@ export default function App() {
 
       {/* 时间窗（预览时展示修复后的窗口；正常可满足时展示当前窗口） */}
       {effectiveResult.satisfiable && (
-        <WindowsTable
-          events={events}
-          windows={effectiveResult.windows}
-          cycleEventIds={cycleEventIds}
-          anchorId={anchorId}
-          anchorTime={anchorTime}
-        />
+        <>
+          <WindowsTable
+            events={events}
+            windows={effectiveResult.windows}
+            cycleEventIds={cycleEventIds}
+            anchorId={anchorId}
+            anchorTime={anchorTime}
+            onTrace={onTraceCell}
+            traceEventId={traceQuery?.eventId ?? null}
+            traceKind={traceQuery?.kind ?? null}
+          />
+          {trace && (
+            <div style={{ marginTop: 12 }}>
+              <TracePanel
+                trace={trace}
+                events={events}
+                constraints={effectiveConstraints}
+                onClose={clearTrace}
+              />
+            </div>
+          )}
+        </>
       )}
 
       <div className="footer-note">

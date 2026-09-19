@@ -598,3 +598,203 @@ table.windows th.num {
 .constraint-row.preview-off .constraint-text {
   color: var(--ok);
 }
+
+/* ---------- 边界依据追溯 ---------- */
+.trace-panel {
+  border-color: rgba(199, 146, 234, 0.5);
+  background: linear-gradient(180deg, rgba(199, 146, 234, 0.07), var(--bg-panel) 70%);
+}
+.trace-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.trace-head h3 {
+  margin: 0;
+  font-size: 14.5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.trace-head h3 .count {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 12.5px;
+}
+.trace-explain {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  margin-bottom: 8px;
+}
+.trace-chain-hint {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: #a98bc9;
+  margin: 2px 0 8px;
+}
+.trace-zero {
+  border: 1px dashed rgba(199, 146, 234, 0.55);
+  background: rgba(199, 146, 234, 0.08);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--text);
+}
+.trace-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  counter-reset: trace;
+}
+.trace-step {
+  border: 1px solid rgba(199, 146, 234, 0.35);
+  background: rgba(199, 146, 234, 0.06);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.trace-step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.trace-step-no {
+  font-weight: 700;
+  color: #d3b3f0;
+  font-size: 12.5px;
+}
+.trace-bound {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.trace-bound.upper {
+  color: #7ee2a8;
+  border-color: rgba(63, 185, 80, 0.6);
+  background: var(--ok-bg);
+}
+.trace-bound.lower {
+  color: #f0c674;
+  border-color: rgba(210, 153, 34, 0.6);
+  background: var(--warn-bg);
+}
+.trace-cum {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.trace-cum strong {
+  color: #d3b3f0;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+.trace-inequality {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.trace-inequality .tn {
+  color: #e3d2f7;
+}
+.trace-inequality .tw {
+  color: var(--accent);
+  font-weight: 700;
+}
+.trace-from {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 3px 0;
+}
+.trace-node {
+  display: inline-block;
+  background: rgba(199, 146, 234, 0.14);
+  border: 1px solid rgba(199, 146, 234, 0.55);
+  border-radius: 4px;
+  padding: 0 7px;
+  color: #e3d2f7;
+  white-space: nowrap;
+}
+.trace-arrow {
+  color: #c792ea;
+  margin: 0 4px;
+  white-space: nowrap;
+}
+.trace-constraint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.trace-conclusion {
+  margin-top: 10px;
+  border-top: 1px dashed rgba(199, 146, 234, 0.35);
+  padding-top: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.trace-conclusion strong {
+  color: #d3b3f0;
+}
+
+/* 时间窗表中的可点击边界单元格 */
+.cell-bound {
+  display: inline-block;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+button.cell-bound.trace-link {
+  background: rgba(77, 163, 255, 0.08);
+  border: 1px solid rgba(77, 163, 255, 0.35);
+  border-radius: 5px;
+  padding: 2px 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition: background 0.12s, border-color 0.12s;
+}
+button.cell-bound.trace-link:hover {
+  background: rgba(77, 163, 255, 0.2);
+  border-color: var(--accent);
+}
+.cell-bound.unbound {
+  color: var(--text-muted);
+  cursor: help;
+}
+.cell-bound.trace-active {
+  background: rgba(199, 146, 234, 0.22) !important;
+  border-color: #c792ea !important;
+  color: #e3d2f7 !important;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(199, 146, 234, 0.5);
+}
+.windows-hint {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* 约束列表中的追溯高亮 */
+.constraint-row.in-trace {
+  background: rgba(199, 146, 234, 0.1);
+  border-color: rgba(199, 146, 234, 0.55);
+}
+.constraint-row.in-trace .constraint-text {
+  color: #d3b3f0;
+  font-weight: 600;
+}
+.badge.trace-badge {
+  background: rgba(199, 146, 234, 0.16);
+  color: #d3b3f0;
+  border: 1px solid rgba(199, 146, 234, 0.6);
+}

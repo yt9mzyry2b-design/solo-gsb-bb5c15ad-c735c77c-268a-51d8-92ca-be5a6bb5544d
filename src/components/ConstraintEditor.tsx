@@ -7,6 +7,8 @@ interface Props {
   cycleConstraintIds: Set<string>
   /** 修复预览中临时停用的约束 id（不写入 localStorage） */
   previewOffIds?: Set<string> | null
+  /** 边界依据追溯链涉及的约束 id → 推导步序号（从 1 起） */
+  traceConstraintSteps?: Map<string, number>
   onAdd: (c: Omit<Constraint, 'id'>) => void
   onRemove: (id: string) => void
   onUpdate: (id: string, patch: Partial<Constraint>) => void
@@ -17,6 +19,7 @@ export default function ConstraintEditor({
   constraints,
   cycleConstraintIds,
   previewOffIds,
+  traceConstraintSteps,
   onAdd,
   onRemove,
   onUpdate,
@@ -61,10 +64,12 @@ export default function ConstraintEditor({
       {constraints.map((c) => {
         const inCycle = cycleConstraintIds.has(c.id)
         const previewOff = previewOffIds?.has(c.id) ?? false
+        const traceStep = traceConstraintSteps?.get(c.id)
+        const inTrace = traceStep !== undefined
         return (
           <div
             key={c.id}
-            className={`constraint-row${inCycle ? ' in-cycle' : ''}${c.enabled && !previewOff ? '' : ' disabled'}${previewOff ? ' preview-off' : ''}`}
+            className={`constraint-row${inCycle ? ' in-cycle' : ''}${c.enabled && !previewOff ? '' : ' disabled'}${previewOff ? ' preview-off' : ''}${inTrace ? ' in-trace' : ''}`}
           >
             <div className="constraint-editors">
               <input
@@ -74,6 +79,7 @@ export default function ConstraintEditor({
                 onChange={(e) => onUpdate(c.id, { enabled: e.target.checked })}
                 title={previewOff ? '修复预览中临时停用（未保存）' : '启用 / 停用该约束'}
               />
+              {inTrace && <span className="badge trace-badge">追溯第 {traceStep} 步</span>}
               <select
                 value={c.aId}
                 onChange={(e) => onUpdate(c.id, { aId: e.target.value })}
@@ -131,6 +137,7 @@ export default function ConstraintEditor({
               {c.min === c.max ? c.min : `${c.min}~${c.max}`} 分钟
               {inCycle && '　← 属于矛盾环'}
               {previewOff && '　← 预览停用（未保存）'}
+              {inTrace && '　← 边界依据追溯链第 ' + traceStep + ' 步'}
             </div>
           </div>
         )
